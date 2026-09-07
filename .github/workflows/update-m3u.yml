@@ -49,13 +49,22 @@ jobs:
       - name: Check for substantive changes
         id: changes
         run: |
-          if git diff --quiet -- channels.m3u; then
+          if [ ! -f channels.m3u ]; then
+            echo "::error::channels.m3u 未生成，终止（不提交不部署）"
+            exit 1
+          fi
+          # 用 git status --porcelain 判断变化：
+          #   未跟踪新文件(??，初次部署) 与 已跟踪被修改( M) 都能检出；
+          #   单纯 git diff 看不到未跟踪文件，会导致初次部署跳过提交。
+          # 脚本输出不含时间戳，因此这里非空 ⇔ 频道列表发生实质变化。
+          if [ -z "$(git status --porcelain -- channels.m3u)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "频道列表无实质变化，跳过提交与部署。"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "检测到频道列表变化："
-            git --no-pager diff --stat -- channels.m3u
+            git status --porcelain -- channels.m3u
+            git --no-pager diff --stat -- channels.m3u || true
           fi
 
       - name: Commit and push

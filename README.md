@@ -64,14 +64,15 @@ python3 -m unittest discover -s tests -v
 ### 确定性输出（避免无意义提交的关键）
 - **不含任何时间戳**：旧版 `# Last updated:` 每次运行都变，必然产生提交。
 - 相同 API 数据 → 字节级一致的文件（已实测两次运行 `cmp` 相同），因此
-  `git diff` 为空 ⇔ 频道列表无实质变化。
+  `git status --porcelain` 为空 ⇔ 频道列表无实质变化。
 
 ## GitHub Actions 工作流
 
 - **触发**：`cron: '0 */6 * * *'`（UTC 00/06/12/18 = 北京时间 08/14/20/02，高峰期
   可能延迟几分钟）；支持手动 `workflow_dispatch`；脚本/工作流变更 push 后立即重跑。
-- **流程**：checkout → Python 3.12 → 跑测试 → 生成 M3U → `git diff --quiet` 判断
-  实质变化 → 有变化才 commit（信息含有效频道数与增删行统计，如
+- **流程**：checkout → Python 3.12 → 跑测试 → 生成 M3U → `git status --porcelain`
+  判断实质变化（未跟踪新文件与已修改文件都能检出，**初次部署不会漏提交**）→
+  有变化才 commit（信息含有效频道数与增删行统计，如
   `update: channels.m3u (279 channels) [+3 -3]`）→ push（带 rebase 防竞态）→
   部署 GitHub Pages。
 - **防呆**：抓取失败或触发 `--min-channels` 阈值时步骤直接失败，不提交不部署；
