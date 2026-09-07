@@ -1,0 +1,89 @@
+name: Update M3U
+
+# 每 6 小时抓取一次频道 API 并更新 channels.m3u；
+# 只有频道列表发生“实质变化”时才提交与部署（输出不含时间戳，
+# git diff 为空即代表无变化，不会产生无意义的提交/部署）。
+
+on:
+  schedule:
+    # UTC 00/06/12/18 点 = 北京时间 08/14/20/02 点
+    # 注意：GitHub 高峰期定时任务可能延迟数分钟到数十分钟
+    - cron: '0 */6 * * *'
+  workflow_dispatch: {}   # 允许手动触发
+  push:
+    branches: [main]      # 修改脚本或工作流本身后立即重新生成一次
+    paths:
+      - 'json_to_m3u.py'
+      - 'tests/**'
+      - '.github/workflows/update-m3u.yml'
+
+permissions:
+  contents: write         # 提交 channels.m3u
+
+# 同一时刻只允许一个更新任务；不取消进行中的任务，避免提交到一半被打断
+concurrency:
+  group: update-m3u
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Generate M3U
+        # 脚本自带重试；有效频道数异常偏低时会以非零码退出，
+        # 直接令本步骤失败，从而不会提交/部署坏数据
+        run: python json_to_m3u.py -o channels.m3u --retries 3 --retry-delay 10
+
+      - name: Check for substantive changes
+        id: changes
+        run: |
+          if git diff --quiet -- channels.m3u; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "频道列表无实质变化，跳过提交与部署。"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "检测到频道列表变化："
+            git --no-pager diff --stat -- channels.m3u
+          fi
+
+      - name: Commit and push
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add channels.m3u
+          TOTAL=$(grep -m1 '^# Total channels:' channels.m3u | awk '{print $NF}')
+          STAT=$(git diff --cached --numstat -- channels.m3u | awk '{print "+"$1" -"$2}')
+          git commit -m "update: channels.m3u (${TOTAL} channels) [${STAT}]"
+          # 若远端在此期间有新提交，先变基再推送，避免竞态失败
+          git pull --rebase origin "$BRANCH" || true
+          git push origin HEAD
+
+      # ---- 可选：部署到 GitHub Pages（gh-pages 分支）----
+      # 仅在频道列表有实质变化时执行；如未启用 Pages 或不需要部署，删除本步骤即可。
+      # 若 Pages 直接以 main 分支为源，则上一步 push 后 GitHub 会自动重新构建，无需本步骤。
+      - name: Deploy to GitHub Pages
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          mkdir -p _site
+          cp channels.m3u _site/
+      - uses: peaceiris/actions-gh-pages@v4
+        if: steps.changes.outputs.changed == 'true'
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_site
+          # 只发布播放列表本身；如需同时发布其他文件请自行调整 publish_dir
